@@ -53,7 +53,7 @@ void entry(){ // need to find a portable solution for parameter passing here...c
     shdr++;
   }
   
-  // replace __gmon_start__ with SO name
+  // replace __gmon_start__ with SO name (14 char len) NOTE: _ITM_* strings provide 24 & 27 chars to work with
   char* str = dyn_str + 1; // 1st entry is null, skip over
   while(1){ // so far it seems that gcc, clang and even tcc provide the __gmon_start__ string....may suffice to only use it, TBD
     if(!strcmp(str, "__gmon_start__")){
