@@ -58,7 +58,7 @@ void entry(){ // need to find a portable solution for parameter passing here...c
   while(1){ // so far it seems that gcc, clang and even tcc provide the __gmon_start__ string....may suffice to only use it, TBD
     if(!strcmp(str, "__gmon_start__")){
       str[0] = '.';
-      str[1] = '\0'
+      str[1] = '\0';
       // now '.' will show up in .dynsym instead of soname (maybe find even more covert string replacement?)
       strcpy(&str[2], self);
       break;
