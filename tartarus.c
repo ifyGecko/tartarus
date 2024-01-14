@@ -74,9 +74,8 @@ void entry(){ // todo: use auxv to get envp, argc, argv
       // find dynsym entry and patch to match a normal global symbol
       for(unsigned int i = 0; i < sym_cnt; ++i){
        if(dyn_sym[i].st_name == (str - dyn_str)){
-         // NOTE: fix this later, currently segfaults
-         //dyn_sym[i].st_info = STT_FUNC | STB_GLOBAL;
-         //dyn_sym[i].st_other = STV_DEFAULT;
+         dyn_sym[i].st_info = STB_GLOBAL << 4 | STT_FUNC;
+         dyn_sym[i].st_other = STV_DEFAULT;
          versym[i] = 2; // specify fake version requirements, TODO: add logic to ensure library listing will match sub string
          break;
        }
