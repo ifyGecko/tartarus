@@ -13,7 +13,7 @@
 #define lib "./test.so"
 #define self "tartarus.so"
 #define target "./tmp"
-#define sub "ctime"
+#define sub "exit"
 
 const char interp[] __attribute__((section(".interp"))) = "/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2";
 
@@ -117,28 +117,34 @@ void entry(){ // todo: use auxv to get envp, argc, argv
           for(int j = 0; j < libc_ehdr->e_shnum; ++j){
             if(libc_shdr->sh_type == SHT_GNU_versym){
               libc_versym = (Elf64_Half*)((char*)libc_ehdr + libc_shdr->sh_offset);
+	      printf("libc_versym: %p\n", libc_versym);
 	      // TODO: do I explicitly need to do the strcmp for .dynsym?? tbd
             }else if(libc_shdr->sh_type == SHT_DYNSYM && !strcmp(&libc_strtab[libc_shdr->sh_name], ".dynsym")){
               libc_dynsym = (Elf64_Sym*)((char*)libc_ehdr + libc_shdr->sh_offset);
               libc_sym_cnt = libc_shdr->sh_size / sizeof(Elf64_Sym);
+	      printf("libc_dynsym: %p, symcnt: %d\n", libc_dynsym, libc_sym_cnt);
             }else if(libc_shdr->sh_type == SHT_STRTAB && !strcmp(&libc_strtab[libc_shdr->sh_name], ".dynstr")){
               libc_dynstr = (char*)libc_ehdr + libc_shdr->sh_offset;
+	      printf("libc_dynstr: %p\n", libc_dynstr);
             }
             libc_shdr++;
           }
 
           // find version index for 'sub' in libc
           unsigned int ver_ndx = VER_NDX_GLOBAL; //default: unversioned
-          for(int j = 0; j < libc_sym_cnt; ++j){
+          for(int j = 1; j < libc_sym_cnt; ++j){
+	    printf("str: %s\n", &libc_dynstr[libc_dynsym[j].st_name]);
+	    printf("versym: %d\n", libc_versym[j] & 0x7fff);
             if(libc_dynsym[j].st_name != 0 && !strcmp(&libc_dynstr[libc_dynsym[j].st_name], sub)){
 	      // NOTE: VERSYM_HIDDEN should never be set for a chosen 'sub' symbol
               ver_ndx = libc_versym[j] & 0x7fff;
+	      printf("verndx: %d\n", ver_ndx);
               break;
             }
           }
 
           // assign libc 'sub' version index to target
-	  versym[i] = ver_ndx;
+	  versym[i] = 3; //ver_ndx;
 
           munmap(libc, 0x300000);
 	  break;
