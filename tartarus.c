@@ -117,15 +117,12 @@ void entry(){ // todo: use auxv to get envp, argc, argv
           for(int j = 0; j < libc_ehdr->e_shnum; ++j){
             if(libc_shdr->sh_type == SHT_GNU_versym){
               libc_versym = (Elf64_Half*)((char*)libc_ehdr + libc_shdr->sh_offset);
-              printf("libc_versym: %p\n", libc_versym);
               // TODO: do I explicitly need to do the strcmp for .dynsym?? tbd
             }else if(libc_shdr->sh_type == SHT_DYNSYM && !strcmp(&libc_strtab[libc_shdr->sh_name], ".dynsym")){
               libc_dynsym = (Elf64_Sym*)((char*)libc_ehdr + libc_shdr->sh_offset);
               libc_sym_cnt = libc_shdr->sh_size / sizeof(Elf64_Sym);
-              printf("libc_dynsym: %p, symcnt: %d\n", libc_dynsym, libc_sym_cnt);
             }else if(libc_shdr->sh_type == SHT_STRTAB && !strcmp(&libc_strtab[libc_shdr->sh_name], ".dynstr")){
               libc_dynstr = (char*)libc_ehdr + libc_shdr->sh_offset;
-              printf("libc_dynstr: %p\n", libc_dynstr);
             }
             libc_shdr++;
           }
@@ -133,83 +130,64 @@ void entry(){ // todo: use auxv to get envp, argc, argv
           // find version index for 'sub' in libc
           unsigned int ver_ndx = VER_NDX_GLOBAL; //default: unversioned
           for(int j = 1; j < libc_sym_cnt; ++j){
-            printf("str: %s\n", &libc_dynstr[libc_dynsym[j].st_name]);
-            printf("versym: %d\n", libc_versym[j] & 0x7fff);
             if(libc_dynsym[j].st_name != 0 && !strcmp(&libc_dynstr[libc_dynsym[j].st_name], sub)){
               // NOTE: VERSYM_HIDDEN should never be set for a chosen 'sub' symbol
+	      // NOTE: VER_NDX_GLOBAL should also never be set for a chosen 'sub'
               ver_ndx = libc_versym[j] & 0x7fff;
-              printf("verndx: %d\n", ver_ndx);
               break;
             }
           }
 
           // assign versym[i] the version index that corresponds to the version string that ver_ndx corresponds to in libc for 'sub'
-          // to do this, figure out the version string ver_ndx point to in libc, example GLIBC_2.2.5, then figure out the version index
-          // for this same string in 'target'.
-          // BEGIN: code added to resolve version index mapping between libc and target
-          if(ver_ndx == VER_NDX_GLOBAL){
-            // symbol is unversioned, use global version index
-            versym[i] = VER_NDX_GLOBAL;
-          } else {
-            // find version string for ver_ndx in libc's verdef section
-            char* ver_str = NULL;
-            Elf64_Shdr* libc_shdr_iter = (Elf64_Shdr*)(libc + libc_ehdr->e_shoff);
-            for(int j = 0; j < libc_ehdr->e_shnum; ++j){
-              if(libc_shdr_iter->sh_type == SHT_GNU_verdef && libc_shdr_iter->sh_size > 0){
-                Elf64_Verdef* vd = (Elf64_Verdef*)((char*)libc_ehdr + libc_shdr_iter->sh_offset);
-                while(1){
-                  if(vd->vd_ndx == ver_ndx){
-                    // found the version definition, get the version string from the first auxiliary entry
-                    Elf64_Verdaux* vda = (Elf64_Verdaux*)((char*)vd + vd->vd_aux);
-                    ver_str = &libc_dynstr[vda->vda_name];
-                    break;
-                  }
-                  if(vd->vd_next == 0) break;
-                  vd = (Elf64_Verdef*)((char*)vd + vd->vd_next);
-                }
-                if(ver_str) break;
-              }
-              libc_shdr_iter++;
-            }
+	    
+	  // find version string for ver_ndx in libc's verdef section
+	  char* ver_str = NULL;
+	  Elf64_Shdr* libc_shdr_iter = (Elf64_Shdr*)(libc + libc_ehdr->e_shoff);
+	  for(int j = 0; j < libc_ehdr->e_shnum; ++j){
+	    if(libc_shdr_iter->sh_type == SHT_GNU_verdef && libc_shdr_iter->sh_size > 0){
+	      Elf64_Verdef* vd = (Elf64_Verdef*)((char*)libc_ehdr + libc_shdr_iter->sh_offset);
+	      while(1){
+		if(vd->vd_ndx == ver_ndx){
+		  // found the version definition, get the version string from the first auxiliary entry
+		  Elf64_Verdaux* vda = (Elf64_Verdaux*)((char*)vd + vd->vd_aux);
+		  // NOTE: ver_str is assumed will be found
+		  ver_str = &libc_dynstr[vda->vda_name];
+		  break;
+		}
+		if(vd->vd_next == 0) break;
+		vd = (Elf64_Verdef*)((char*)vd + vd->vd_next);
+	      }
+	      if(ver_str) break;
+	    }
+	    libc_shdr_iter++;
+	  }
             
-            if(ver_str){
-              // find target's verneed section and look for the version string
-              int found = 0;
-              Elf64_Shdr* target_shdr_iter = (Elf64_Shdr*)(base + ehdr->e_shoff);
-              for(int j = 0; j < ehdr->e_shnum; ++j){
-                if(target_shdr_iter->sh_type == SHT_GNU_verneed && target_shdr_iter->sh_size > 0){
-                  Elf64_Verneed* vn = (Elf64_Verneed*)((char*)ehdr + target_shdr_iter->sh_offset);
-                  while(1){
-                    // iterate through vernaux entries for this verneed
-                    Elf64_Vernaux* vna = (Elf64_Vernaux*)((char*)vn + vn->vn_aux);
-                    for(int k = 0; k < vn->vn_cnt; ++k){
-                      if(!strcmp(&dyn_str[vna->vna_name], ver_str)){
-                        // found the version string, use the version index from vna_other
-                        versym[i] = vna->vna_other;
-                        printf("versym ndx found: %d\n", versym[i]);
-                        found = 1;
-                        break;
-                      }
-                      if(vna->vna_next == 0) break;
-                      vna = (Elf64_Vernaux*)((char*)vna + vna->vna_next);
-                    }
-                    if(found) break;
-                    if(vn->vn_next == 0) break;
-                    vn = (Elf64_Verneed*)((char*)vn + vn->vn_next);
-                  }
-                  break;
-                }
-                target_shdr_iter++;
-              }
-              if(!found){
-                // couldn't find version string in target's verneed, use default
-                versym[i] = VER_NDX_GLOBAL;
-              }
-            } else {
-              // couldn't find version string in libc, use default
-              versym[i] = VER_NDX_GLOBAL;
-            }
-          }
+	  // find target's verneed section and look for the version string
+	  int found = 0;
+	  Elf64_Shdr* target_shdr_iter = (Elf64_Shdr*)(base + ehdr->e_shoff);
+	  for(int j = 0; j < ehdr->e_shnum; ++j){
+	    if(target_shdr_iter->sh_type == SHT_GNU_verneed && target_shdr_iter->sh_size > 0){
+	      Elf64_Verneed* vn = (Elf64_Verneed*)((char*)ehdr + target_shdr_iter->sh_offset);
+	      while(1){
+		// iterate through vernaux entries for this verneed
+		Elf64_Vernaux* vna = (Elf64_Vernaux*)((char*)vn + vn->vn_aux);
+		for(int k = 0; k < vn->vn_cnt; ++k){
+		  if(!strcmp(&dyn_str[vna->vna_name], ver_str)){
+		    // found the version string, use the version index from vna_other
+		    versym[i] = vna->vna_other;
+		    break;
+		  }
+		  if(vna->vna_next == 0) break;
+		  vna = (Elf64_Vernaux*)((char*)vna + vna->vna_next);
+		}
+		if(found) break;
+		if(vn->vn_next == 0) break;
+		vn = (Elf64_Verneed*)((char*)vn + vn->vn_next);
+	      }
+	      break;
+	    }
+	    target_shdr_iter++;
+	  }
 
           munmap(libc, 0x300000);
           break;
