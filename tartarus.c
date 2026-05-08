@@ -17,7 +17,18 @@
 
 const char interp[] __attribute__((section(".interp"))) = "/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2";
 
-void entry(){ // todo: use auxv to get envp, argc, argv
+void entry() {
+  // retrieve argc, argv, envp via initial stack layout (auxv region)
+  unsigned long *frame;
+  __asm__ volatile ("movq %%rbp, %0" : "=r" (frame)); // TODO: can this be done with out inline asm??
+  int argc = *(int *)(frame + 1);
+  char **argv = (char **)(frame + 2);
+  char **envp = argv + argc + 1;
+
+  int envc = 0;
+  while (envp[envc] != NULL) envc++;
+  Elf64_auxv_t *auxv = (Elf64_auxv_t *)(envp + envc + 1); //TODO: do we need auxv for anything??
+  
   int fd = open(target, O_RDWR);
   void* base = mmap(NULL, 0x300000, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0); // file backed shared memory mapping so changes reflect in file
 
