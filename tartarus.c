@@ -17,7 +17,7 @@ const char interp[] __attribute__((section(".interp"))) = "/lib/x86_64-linux-gnu
 void entry() {
   // retrieve argc, argv, envp via initial stack layout (auxv region)
   unsigned long *frame;
-  __asm__ volatile ("movq %%rbp, %0" : "=r" (frame)); // NOTE: can this be done with out inline asm??
+  frame = (unsigned long *)__builtin_frame_address(0);
   int argc = *(int *)(frame + 1);
   char **argv = (char **)(frame + 2);
   char **envp = argv + argc + 1;
