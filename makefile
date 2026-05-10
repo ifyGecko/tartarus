@@ -6,7 +6,7 @@ default: tartarus.c test.c
 test:
 	make
 	LD_PRELOAD=./tartarus.so ls
-	./tartarus.so ./tmp
+	./tartarus.so ./tmp exit
 	sudo cp ./tartarus.so /lib/x86_64-linux-gnu/
 	./tmp
 	sudo rm /lib/x86_64-linux-gnu/tartarus.so

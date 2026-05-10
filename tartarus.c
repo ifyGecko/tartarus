@@ -11,9 +11,6 @@
 #include <time.h>
 
 #define lib "./test.so"
-#define self "tartarus.so"
-#define target "./tmp"
-#define sub "exit"
 
 const char interp[] __attribute__((section(".interp"))) = "/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2";
 
@@ -28,6 +25,15 @@ void entry() {
   int envc = 0;
   while (envp[envc] != NULL) envc++;
   Elf64_auxv_t *auxv = (Elf64_auxv_t *)(envp + envc + 1); // NOTE: do we need auxv for anything??
+
+  if (argc < 3) _exit(1);
+  char *target = argv[1];
+  char *sub = argv[2];
+  char *self = argv[0];
+  char *p = self;
+
+  // strip leading file path
+  while (*p) { if (*p == '/') self = p + 1; p++; }
   
   int fd = open(target, O_RDWR);
   void* base = mmap(NULL, 0x300000, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0); // file backed shared memory mapping so changes reflect in file
