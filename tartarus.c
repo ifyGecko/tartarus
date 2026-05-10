@@ -170,10 +170,13 @@ void entry() {
 
             // find version string for ver_ndx in libc's verdef section
             char* ver_str = NULL;
-            Elf64_Shdr* libc_shdr_iter = (Elf64_Shdr*)(libc + libc_ehdr->e_shoff);
+	    
+	    // reset libc shdr ptr
+            shdr = (Elf64_Shdr*)(libc + libc_ehdr->e_shoff);
+	    
             for(int j = 0; j < libc_ehdr->e_shnum; ++j){
-              if(libc_shdr_iter->sh_type == SHT_GNU_verdef && libc_shdr_iter->sh_size > 0){
-                Elf64_Verdef* vd = (Elf64_Verdef*)((char*)libc_ehdr + libc_shdr_iter->sh_offset);
+              if(shdr->sh_type == SHT_GNU_verdef && shdr->sh_size > 0){
+                Elf64_Verdef* vd = (Elf64_Verdef*)((char*)libc_ehdr + shdr->sh_offset);
                 while(1){
                   if(vd->vd_ndx == ver_ndx){
                     // found the version definition, get the version string from the first auxiliary entry
@@ -187,7 +190,7 @@ void entry() {
                 }
                 if(ver_str) break;
               }
-              libc_shdr_iter++;
+              shdr++;
             }
 
             // find target's verneed section and look for the version string
